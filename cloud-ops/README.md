@@ -8,6 +8,7 @@ This section covers comprehensive Cloud Operations interview questions for AWS, 
 - [🔧 AWS](./aws.md) - Amazon Web Services specific questions
 - [🌐 Azure](./azure.md) - Microsoft Azure platform questions
 - [🏗️ Google Cloud](./gcp.md) - Google Cloud Platform questions
+- [🚀 Terraform](./terraform.md) - Infrastructure as Code with Terraform
 - [🔄 Multi-Cloud](./multi-cloud.md) - Multi-cloud strategies and management
 - [💰 Cost Optimization](./cost-optimization.md) - Cloud cost management and optimization
 - [🛡️ Security](./security.md) - Cloud security best practices and compliance

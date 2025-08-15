@@ -73,6 +73,40 @@ def lambda_handler(event, context):
 **Answer:**
 VPC (Virtual Private Cloud) provides isolated network environment in AWS.
 
+```mermaid
+graph TB
+    Internet[Internet] --> IGW[Internet Gateway]
+    IGW --> ALB[Application Load Balancer]
+    
+    subgraph "VPC 10.0.0.0/16"
+        subgraph "Public Subnet 10.0.1.0/24"
+            ALB
+            NAT[NAT Gateway]
+        end
+        
+        subgraph "Private Subnet 10.0.2.0/24"
+            EC2_1[EC2 Instance 1]
+            EC2_2[EC2 Instance 2]
+        end
+        
+        subgraph "Database Subnet 10.0.3.0/24"
+            RDS[(RDS Database)]
+        end
+    end
+    
+    ALB --> EC2_1
+    ALB --> EC2_2
+    EC2_1 --> RDS
+    EC2_2 --> RDS
+    EC2_1 --> NAT
+    EC2_2 --> NAT
+    NAT --> IGW
+    
+    style ALB fill:#ff9800
+    style NAT fill:#4caf50
+    style RDS fill:#2196f3
+```
+
 **Core Components:**
 
 **VPC Structure:**
@@ -96,6 +130,30 @@ vpc_architecture:
       cidr: "10.0.3.0/24"
       availability_zone: "us-west-2a"
       type: "database"
+```
+
+**Security Groups vs NACLs:**
+```mermaid
+graph LR
+    subgraph "Network ACLs"
+        NACL[Subnet Level]
+        Stateless[Stateless]
+        Rules[Allow/Deny Rules]
+    end
+    
+    subgraph "Security Groups"
+        SG[Instance Level]
+        Stateful[Stateful]
+        Allow[Allow Rules Only]
+    end
+    
+    NACL --> Stateless
+    Stateless --> Rules
+    SG --> Stateful
+    Stateful --> Allow
+    
+    style NACL fill:#f44336
+    style SG fill:#4caf50
 ```
 
 **Route Tables:**
