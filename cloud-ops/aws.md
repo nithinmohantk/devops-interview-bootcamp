@@ -599,6 +599,360 @@ organization_structure:
 - **Audit Trail**: Centralized logging and monitoring
 - **Compliance**: Easier compliance management across accounts
 
+**Python Script for Account Management:**
+```python
+#!/usr/bin/env python3
+# aws_account_manager.py
+import boto3
+import json
+import sys
+from typing import List, Dict, Any
+
+class AWSAccountManager:
+    def __init__(self):
+        self.organizations = boto3.client('organizations')
+        self.sts = boto3.client('sts')
+    
+    def list_accounts(self) -> List[Dict[str, Any]]:
+        """List all accounts in the organization"""
+        try:
+            response = self.organizations.list_accounts()
+            return response['Accounts']
+        except Exception as e:
+            print(f"Error listing accounts: {e}")
+            return []
+    
+    def create_account(self, account_name: str, email: str) -> Dict[str, Any]:
+        """Create a new AWS account"""
+        try:
+            response = self.organizations.create_account(
+                AccountName=account_name,
+                Email=email
+            )
+            return response
+        except Exception as e:
+            print(f"Error creating account: {e}")
+            return {}
+    
+    def apply_scp_policy(self, policy_document: Dict, targets: List[str]) -> None:
+        """Apply Service Control Policy to accounts or OUs"""
+        try:
+            # Create policy
+            policy_response = self.organizations.create_policy(
+                Name=f"SCP-{policy_document['Name']}",
+                Description=policy_document.get('Description', ''),
+                Type='SERVICE_CONTROL_POLICY',
+                Content=json.dumps(policy_document['PolicyDocument'])
+            )
+            
+            policy_id = policy_response['Policy']['PolicySummary']['Id']
+            
+            # Attach to targets
+            for target in targets:
+                self.organizations.attach_policy(
+                    PolicyId=policy_id,
+                    TargetId=target
+                )
+                print(f"Policy attached to {target}")
+                
+        except Exception as e:
+            print(f"Error applying SCP: {e}")
+    
+    def generate_account_report(self) -> None:
+        """Generate comprehensive account report"""
+        print("AWS Organization Account Report")
+        print("=" * 50)
+        
+        accounts = self.list_accounts()
+        
+        for account in accounts:
+            print(f"Account: {account['Name']}")
+            print(f"  ID: {account['Id']}")
+            print(f"  Email: {account['Email']}")
+            print(f"  Status: {account['Status']}")
+            print(f"  Joined: {account['JoinedTimestamp']}")
+            print()
+
+def main():
+    manager = AWSAccountManager()
+    
+    if len(sys.argv) > 1:
+        command = sys.argv[1]
+        
+        if command == "list":
+            manager.generate_account_report()
+        elif command == "create" and len(sys.argv) == 4:
+            name, email = sys.argv[2], sys.argv[3]
+            result = manager.create_account(name, email)
+            print(f"Account creation initiated: {result}")
+        else:
+            print("Usage: python3 aws_account_manager.py [list|create <name> <email>]")
+    else:
+        manager.generate_account_report()
+
+if __name__ == "__main__":
+    main()
+```
+
+**Bash Script for AWS Resource Cleanup:**
+```bash
+#!/bin/bash
+# aws-cleanup.sh - Comprehensive AWS resource cleanup script
+
+set -e
+
+# Configuration
+REGION=${AWS_DEFAULT_REGION:-us-east-1}
+DRY_RUN=${DRY_RUN:-false}
+LOG_FILE="/tmp/aws-cleanup-$(date +%Y%m%d-%H%M%S).log"
+
+# Logging function
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+# Function to check if AWS CLI is configured
+check_aws_cli() {
+    if ! aws sts get-caller-identity >/dev/null 2>&1; then
+        log "ERROR: AWS CLI not configured or no permissions"
+        exit 1
+    fi
+    
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    log "Connected to AWS Account: $ACCOUNT_ID"
+}
+
+# Function to cleanup EC2 instances
+cleanup_ec2_instances() {
+    log "Cleaning up EC2 instances..."
+    
+    # Get running instances
+    INSTANCES=$(aws ec2 describe-instances \
+        --region "$REGION" \
+        --filters "Name=instance-state-name,Values=running" \
+        --query 'Reservations[].Instances[].InstanceId' \
+        --output text)
+    
+    if [ -n "$INSTANCES" ]; then
+        log "Found instances to terminate: $INSTANCES"
+        
+        if [ "$DRY_RUN" = "false" ]; then
+            aws ec2 terminate-instances --region "$REGION" --instance-ids $INSTANCES
+            log "Terminated instances: $INSTANCES"
+        else
+            log "DRY RUN: Would terminate instances: $INSTANCES"
+        fi
+    else
+        log "No running instances found"
+    fi
+}
+
+# Function to cleanup S3 buckets
+cleanup_s3_buckets() {
+    log "Cleaning up S3 buckets..."
+    
+    # List buckets
+    BUCKETS=$(aws s3api list-buckets --query 'Buckets[].Name' --output text)
+    
+    for bucket in $BUCKETS; do
+        # Skip if bucket name contains 'prod' or 'production'
+        if [[ $bucket == *"prod"* ]] || [[ $bucket == *"production"* ]]; then
+            log "SKIPPING production bucket: $bucket"
+            continue
+        fi
+        
+        log "Processing bucket: $bucket"
+        
+        if [ "$DRY_RUN" = "false" ]; then
+            # Empty bucket first
+            aws s3 rm s3://"$bucket" --recursive 2>/dev/null || true
+            
+            # Delete bucket
+            aws s3api delete-bucket --bucket "$bucket" --region "$REGION" 2>/dev/null || true
+            log "Deleted bucket: $bucket"
+        else
+            log "DRY RUN: Would delete bucket: $bucket"
+        fi
+    done
+}
+
+# Function to cleanup Lambda functions
+cleanup_lambda_functions() {
+    log "Cleaning up Lambda functions..."
+    
+    FUNCTIONS=$(aws lambda list-functions \
+        --region "$REGION" \
+        --query 'Functions[].FunctionName' \
+        --output text)
+    
+    for function in $FUNCTIONS; do
+        # Skip if function name contains 'prod'
+        if [[ $function == *"prod"* ]]; then
+            log "SKIPPING production function: $function"
+            continue
+        fi
+        
+        if [ "$DRY_RUN" = "false" ]; then
+            aws lambda delete-function --region "$REGION" --function-name "$function"
+            log "Deleted function: $function"
+        else
+            log "DRY RUN: Would delete function: $function"
+        fi
+    done
+}
+
+# Function to cleanup RDS instances
+cleanup_rds_instances() {
+    log "Cleaning up RDS instances..."
+    
+    INSTANCES=$(aws rds describe-db-instances \
+        --region "$REGION" \
+        --query 'DBInstances[].DBInstanceIdentifier' \
+        --output text)
+    
+    for instance in $INSTANCES; do
+        if [[ $instance == *"prod"* ]]; then
+            log "SKIPPING production RDS instance: $instance"
+            continue
+        fi
+        
+        if [ "$DRY_RUN" = "false" ]; then
+            aws rds delete-db-instance \
+                --region "$REGION" \
+                --db-instance-identifier "$instance" \
+                --skip-final-snapshot \
+                --delete-automated-backups
+            log "Deleted RDS instance: $instance"
+        else
+            log "DRY RUN: Would delete RDS instance: $instance"
+        fi
+    done
+}
+
+# Function to cleanup ELB load balancers
+cleanup_load_balancers() {
+    log "Cleaning up Load Balancers..."
+    
+    # Application Load Balancers
+    ALB_ARNS=$(aws elbv2 describe-load-balancers \
+        --region "$REGION" \
+        --query 'LoadBalancers[].LoadBalancerArn' \
+        --output text)
+    
+    for arn in $ALB_ARNS; do
+        if [ "$DRY_RUN" = "false" ]; then
+            aws elbv2 delete-load-balancer --region "$REGION" --load-balancer-arn "$arn"
+            log "Deleted ALB: $arn"
+        else
+            log "DRY RUN: Would delete ALB: $arn"
+        fi
+    done
+    
+    # Classic Load Balancers
+    CLB_NAMES=$(aws elb describe-load-balancers \
+        --region "$REGION" \
+        --query 'LoadBalancerDescriptions[].LoadBalancerName' \
+        --output text)
+    
+    for name in $CLB_NAMES; do
+        if [ "$DRY_RUN" = "false" ]; then
+            aws elb delete-load-balancer --region "$REGION" --load-balancer-name "$name"
+            log "Deleted CLB: $name"
+        else
+            log "DRY RUN: Would delete CLB: $name"
+        fi
+    done
+}
+
+# Function to estimate cost savings
+estimate_cost_savings() {
+    log "Estimating potential cost savings..."
+    
+    # This is a simplified estimation
+    RUNNING_INSTANCES=$(aws ec2 describe-instances \
+        --region "$REGION" \
+        --filters "Name=instance-state-name,Values=running" \
+        --query 'length(Reservations[].Instances[])')
+    
+    # Rough estimate: $50/month per instance
+    MONTHLY_SAVINGS=$((RUNNING_INSTANCES * 50))
+    
+    log "Estimated monthly savings: \$${MONTHLY_SAVINGS}"
+}
+
+# Main execution
+main() {
+    log "Starting AWS resource cleanup..."
+    log "Region: $REGION"
+    log "Dry Run: $DRY_RUN"
+    
+    check_aws_cli
+    estimate_cost_savings
+    
+    # Ask for confirmation if not dry run
+    if [ "$DRY_RUN" = "false" ]; then
+        echo "This will DELETE AWS resources. Are you sure? (yes/no)"
+        read -r confirmation
+        if [ "$confirmation" != "yes" ]; then
+            log "Cleanup cancelled by user"
+            exit 0
+        fi
+    fi
+    
+    cleanup_ec2_instances
+    cleanup_s3_buckets
+    cleanup_lambda_functions
+    cleanup_rds_instances
+    cleanup_load_balancers
+    
+    log "Cleanup completed. Log file: $LOG_FILE"
+}
+
+# Usage information
+usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo "Options:"
+    echo "  -d, --dry-run    Perform dry run (default: false)"
+    echo "  -r, --region     AWS region (default: us-east-1)"
+    echo "  -h, --help       Show this help message"
+    echo ""
+    echo "Environment variables:"
+    echo "  DRY_RUN         Set to 'true' for dry run"
+    echo "  AWS_DEFAULT_REGION   Set AWS region"
+    echo ""
+    echo "Examples:"
+    echo "  $0 --dry-run                # Dry run with default region"
+    echo "  $0 --region us-west-2       # Cleanup in us-west-2"
+    echo "  DRY_RUN=true $0             # Dry run using env variable"
+}
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -d|--dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        -r|--region)
+            REGION="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+# Execute main function
+main "$@"
+```
+
 ## AWS Automation and DevOps
 
 ### 11. How do you implement Infrastructure as Code with CloudFormation?

@@ -898,6 +898,14 @@ exclude:
   - aws-ec2-no-public-ingress-sgr
   - aws-s3-encryption-customer-key
 
+custom_checks:
+  - name: "custom-s3-versioning"
+    description: "S3 buckets must have versioning enabled"
+    resource_type: "aws_s3_bucket"
+    severity: "HIGH"
+    rule: |
+      resource.versioning[0].enabled == true
+
 severity_overrides:
   aws-s3-enable-bucket-logging: ERROR
   aws-ec2-enforce-http-token-imds: HIGH
@@ -1103,3 +1111,559 @@ main = rule {
 ```
 
 This comprehensive Terraform section covers fundamentals, state management, modules, advanced concepts, multi-cloud deployment, testing, validation, and team workflows. Each topic includes practical examples, code snippets, and Mermaid diagrams to help with interview preparation and real-world implementation.
+
+## Terraform Automation and DevOps Integration
+
+### 9. Automate Terraform workflows with Python and CI/CD
+
+**Answer:**
+
+**Python Terraform Automation Framework:**
+```python
+#!/usr/bin/env python3
+# terraform_automation.py
+import subprocess
+import json
+import os
+import sys
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+import yaml
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+@dataclass
+class TerraformConfig:
+    """Configuration for Terraform operations"""
+    working_dir: str
+    backend_config: Dict[str, str]
+    var_files: List[str]
+    environment: str
+    auto_approve: bool = False
+    
+class TerraformAutomation:
+    """Comprehensive Terraform automation class"""
+    
+    def __init__(self, config: TerraformConfig):
+        self.config = config
+        self.working_dir = Path(config.working_dir)
+        self.terraform_bin = self._find_terraform_binary()
+        
+    def _find_terraform_binary(self) -> str:
+        """Find Terraform binary in PATH"""
+        terraform_path = subprocess.run(['which', 'terraform'], 
+                                      capture_output=True, text=True)
+        if terraform_path.returncode != 0:
+            raise RuntimeError("Terraform binary not found in PATH")
+        return terraform_path.stdout.strip()
+    
+    def _run_command(self, cmd: List[str], check: bool = True) -> subprocess.CompletedProcess:
+        """Run a command and return the result"""
+        logger.info(f"Running: {' '.join(cmd)}")
+        
+        result = subprocess.run(
+            cmd,
+            cwd=self.working_dir,
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        if result.stdout:
+            logger.info(f"STDOUT: {result.stdout}")
+        if result.stderr:
+            logger.error(f"STDERR: {result.stderr}")
+            
+        if check and result.returncode != 0:
+            raise RuntimeError(f"Command failed with return code {result.returncode}")
+            
+        return result
+    
+    def plan(self, out_file: Optional[str] = None) -> Dict[str, Any]:
+        """Generate Terraform execution plan"""
+        logger.info("Generating Terraform plan...")
+        
+        cmd = [self.terraform_bin, 'plan', '-no-color', '-input=false']
+        
+        # Add variable files
+        for var_file in self.config.var_files:
+            cmd.extend(['-var-file', var_file])
+            
+        # Add output file if specified
+        if out_file:
+            cmd.extend(['-out', out_file])
+            
+        result = self._run_command(cmd, check=False)
+        
+        # Parse plan output for changes
+        plan_info = self._parse_plan_output(result.stdout)
+        plan_info['success'] = result.returncode == 0
+        
+        return plan_info
+    
+    def apply(self, plan_file: Optional[str] = None) -> bool:
+        """Apply Terraform configuration"""
+        logger.info("Applying Terraform configuration...")
+        
+        cmd = [self.terraform_bin, 'apply', '-no-color', '-input=false']
+        
+        if plan_file:
+            cmd.append(plan_file)
+        else:
+            # Add variable files if not using plan file
+            for var_file in self.config.var_files:
+                cmd.extend(['-var-file', var_file])
+                
+        if self.config.auto_approve:
+            cmd.append('-auto-approve')
+            
+        result = self._run_command(cmd)
+        return result.returncode == 0
+
+def main():
+    """Main function"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Terraform Automation Tool')
+    parser.add_argument('action', choices=['plan', 'apply', 'destroy'], 
+                       help='Terraform action to perform')
+    parser.add_argument('-c', '--config', required=True,
+                       help='Configuration file path')
+    
+    args = parser.parse_args()
+    
+    # Implementation continues...
+
+if __name__ == "__main__":
+    main()
+```
+
+**PowerShell Script for Windows Terraform Automation:**
+```powershell
+# terraform-automation.ps1
+param(
+    [Parameter(Mandatory=$true)]
+    [ValidateSet("plan", "apply", "destroy")]
+    [string]$Action,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$Environment,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$WorkingDirectory = ".\infrastructure",
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$AutoApprove
+)
+
+# Function to run Terraform commands
+function Invoke-TerraformCommand {
+    param(
+        [string[]]$Arguments,
+        [string]$WorkingDir = $WorkingDirectory
+    )
+    
+    Write-Host "Running: terraform $($Arguments -join ' ')" -ForegroundColor Green
+    
+    try {
+        $process = Start-Process -FilePath "terraform" -ArgumentList $Arguments -WorkingDirectory $WorkingDir -Wait -PassThru -NoNewWindow
+        return $process.ExitCode -eq 0
+    }
+    catch {
+        Write-Error "Error running terraform: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+# Main execution logic
+switch ($Action) {
+    "plan" {
+        $planArgs = @("plan", "-input=false", "-var-file=environments\$Environment.tfvars")
+        Invoke-TerraformCommand $planArgs
+    }
+    "apply" {
+        $applyArgs = @("apply", "-input=false", "-var-file=environments\$Environment.tfvars")
+        if ($AutoApprove) { $applyArgs += "-auto-approve" }
+        Invoke-TerraformCommand $applyArgs
+    }
+    "destroy" {
+        $destroyArgs = @("destroy", "-input=false", "-var-file=environments\$Environment.tfvars")
+        if ($AutoApprove) { $destroyArgs += "-auto-approve" }
+        Invoke-TerraformCommand $destroyArgs
+    }
+}
+```
+
+**Advanced GitHub Actions Workflow:**
+```yaml
+# .github/workflows/terraform-advanced.yml
+name: Advanced Terraform CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths: ['infrastructure/**']
+  pull_request:
+    branches: [main]
+    paths: ['infrastructure/**']
+
+env:
+  TF_VERSION: 1.5.7
+  AWS_REGION: us-west-2
+
+jobs:
+  terraform-validate:
+    name: Validate and Security Scan
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Terraform Format Check
+      run: terraform fmt -check -recursive
+    
+    - name: Terraform Init
+      run: terraform init
+    
+    - name: Terraform Validate
+      run: terraform validate
+    
+    - name: Run tfsec Security Scan
+      uses: aquasecurity/tfsec-action@v1.0.3
+      with:
+        working_directory: infrastructure
+        soft_fail: true
+    
+    - name: Cost Estimation with Infracost
+      uses: infracost/actions/setup@v2
+      with:
+        api-key: ${{ secrets.INFRACOST_API_KEY }}
+    
+    - name: Generate Infracost diff
+      run: |
+        infracost breakdown --path=. \
+          --format=json \
+          --out-file=/tmp/infracost-base.json
+    
+    - name: Terraform Plan
+      run: |
+        terraform plan -var-file=environments/staging.tfvars -no-color -out=tfplan
+      env:
+        TF_VAR_environment: staging
+    
+    - name: Generate Plan Summary
+      run: |
+        terraform show -json tfplan > plan.json
+        python3 ../scripts/plan_analyzer.py plan.json
+
+  terraform-apply:
+    name: Apply Terraform Changes
+    needs: terraform-validate
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+    defaults:
+      run:
+        working-directory: infrastructure
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Terraform Init
+      run: terraform init
+    
+    - name: Terraform Apply
+      run: |
+        terraform apply -var-file=environments/production.tfvars -auto-approve
+      env:
+        TF_VAR_environment: production
+    
+    - name: Extract Terraform Outputs
+      run: terraform output -json > terraform-outputs.json
+    
+    - name: Post-deployment Tests
+      run: |
+        python3 ../scripts/post_deployment_tests.py terraform-outputs.json
+    
+    - name: Upload Outputs
+      uses: actions/upload-artifact@v3
+      with:
+        name: terraform-outputs
+        path: infrastructure/terraform-outputs.json
+    
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      if: always()
+```
+
+**Bash Script for Multi-Environment Deployment:**
+```bash
+#!/bin/bash
+# deploy-multi-env.sh
+set -e
+
+# Configuration
+ENVIRONMENTS=("dev" "staging" "prod")
+TERRAFORM_DIR="./infrastructure"
+PARALLEL_DEPLOYMENTS=false
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Logging function
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+# Function to validate environment
+validate_environment() {
+    local env=$1
+    local var_file="$TERRAFORM_DIR/environments/${env}.tfvars"
+    
+    if [[ ! -f "$var_file" ]]; then
+        error "Variable file not found: $var_file"
+        return 1
+    fi
+    
+    log "Environment $env validated"
+    return 0
+}
+
+# Function to deploy to single environment
+deploy_environment() {
+    local env=$1
+    local action=${2:-plan}
+    
+    log "Starting $action for environment: $env"
+    
+    cd "$TERRAFORM_DIR"
+    
+    # Initialize Terraform
+    terraform init -input=false
+    
+    # Select workspace
+    terraform workspace select "$env" 2>/dev/null || terraform workspace new "$env"
+    
+    # Validate configuration
+    if ! terraform validate; then
+        error "Terraform validation failed for $env"
+        return 1
+    fi
+    
+    case $action in
+        "plan")
+            terraform plan -var-file="environments/${env}.tfvars" -out="${env}.tfplan"
+            ;;
+        "apply")
+            if [[ -f "${env}.tfplan" ]]; then
+                terraform apply -auto-approve "${env}.tfplan"
+            else
+                terraform apply -var-file="environments/${env}.tfvars" -auto-approve
+            fi
+            ;;
+        "destroy")
+            terraform destroy -var-file="environments/${env}.tfvars" -auto-approve
+            ;;
+        *)
+            error "Unknown action: $action"
+            return 1
+            ;;
+    esac
+    
+    log "$action completed for environment: $env"
+    cd - > /dev/null
+}
+
+# Function to deploy all environments
+deploy_all_environments() {
+    local action=${1:-plan}
+    
+    if [[ "$PARALLEL_DEPLOYMENTS" == "true" ]]; then
+        log "Starting parallel deployment..."
+        
+        for env in "${ENVIRONMENTS[@]}"; do
+            (
+                validate_environment "$env" && deploy_environment "$env" "$action"
+            ) &
+        done
+        
+        wait
+        log "All parallel deployments completed"
+    else
+        log "Starting sequential deployment..."
+        
+        for env in "${ENVIRONMENTS[@]}"; do
+            if validate_environment "$env"; then
+                deploy_environment "$env" "$action"
+            else
+                error "Skipping deployment for $env due to validation failure"
+            fi
+        done
+        
+        log "All sequential deployments completed"
+    fi
+}
+
+# Function to show deployment status
+show_status() {
+    log "Deployment Status Overview"
+    echo "========================="
+    
+    for env in "${ENVIRONMENTS[@]}"; do
+        cd "$TERRAFORM_DIR"
+        
+        if terraform workspace select "$env" 2>/dev/null; then
+            echo -e "Environment: ${GREEN}$env${NC}"
+            
+            # Get workspace info
+            terraform workspace show
+            
+            # Show last apply time if state exists
+            if terraform state list >/dev/null 2>&1; then
+                echo "  Resources: $(terraform state list | wc -l)"
+                echo "  Last modified: $(terraform state pull | jq -r '.serial')"
+            else
+                echo "  Status: No resources deployed"
+            fi
+        else
+            echo -e "Environment: ${RED}$env${NC} (not initialized)"
+        fi
+        
+        echo ""
+        cd - > /dev/null
+    done
+}
+
+# Function to cleanup old plan files
+cleanup() {
+    log "Cleaning up temporary files..."
+    find "$TERRAFORM_DIR" -name "*.tfplan" -delete
+    log "Cleanup completed"
+}
+
+# Main function
+main() {
+    local action=${1:-plan}
+    local environment=${2:-"all"}
+    
+    log "Multi-environment Terraform deployment script"
+    log "Action: $action, Environment: $environment"
+    
+    # Validate Terraform installation
+    if ! command -v terraform &> /dev/null; then
+        error "Terraform is not installed or not in PATH"
+        exit 1
+    fi
+    
+    # Check if working directory exists
+    if [[ ! -d "$TERRAFORM_DIR" ]]; then
+        error "Terraform directory not found: $TERRAFORM_DIR"
+        exit 1
+    fi
+    
+    case $environment in
+        "all")
+            deploy_all_environments "$action"
+            ;;
+        "status")
+            show_status
+            ;;
+        *)
+            if [[ " ${ENVIRONMENTS[*]} " =~ " $environment " ]]; then
+                validate_environment "$environment" && deploy_environment "$environment" "$action"
+            else
+                error "Unknown environment: $environment"
+                echo "Available environments: ${ENVIRONMENTS[*]}"
+                exit 1
+            fi
+            ;;
+    esac
+    
+    # Cleanup on success
+    trap cleanup EXIT
+}
+
+# Usage information
+usage() {
+    echo "Usage: $0 [ACTION] [ENVIRONMENT]"
+    echo ""
+    echo "Actions:"
+    echo "  plan     - Generate and show an execution plan"
+    echo "  apply    - Apply the changes required to reach the desired state"
+    echo "  destroy  - Destroy the Terraform-managed infrastructure"
+    echo ""
+    echo "Environments:"
+    echo "  all      - All environments (${ENVIRONMENTS[*]})"
+    echo "  status   - Show status of all environments"
+    for env in "${ENVIRONMENTS[@]}"; do
+        echo "  $env"
+    done
+    echo ""
+    echo "Examples:"
+    echo "  $0 plan dev              # Plan for dev environment"
+    echo "  $0 apply all             # Apply to all environments"
+    echo "  $0 status                # Show status of all environments"
+}
+
+# Parse command line arguments
+case "${1:-}" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    "")
+        usage
+        exit 1
+        ;;
+    *)
+        main "$@"
+        ;;
+esac
+```
