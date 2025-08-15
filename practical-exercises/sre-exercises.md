@@ -13,6 +13,697 @@ Practical hands-on exercises for Site Reliability Engineering, monitoring, relia
 
 ---
 
+## Referenced Components
+
+This section includes the practical projects mentioned in the comprehensive SRE framework:
+
+### 05-http-metrics: HTTP Metrics Collection Project
+
+**Project Overview**: Comprehensive HTTP metrics collection and analysis system for monitoring web application performance.
+
+**Implementation**:
+
+```python
+# 05-http-metrics/metrics_collector.py
+import time
+import threading
+from flask import Flask, request, jsonify
+from prometheus_client import Counter, Histogram, Gauge, generate_latest
+import logging
+
+app = Flask(__name__)
+
+# Prometheus metrics
+REQUEST_COUNT = Counter(
+    'http_requests_total',
+    'Total HTTP requests',
+    ['method', 'endpoint', 'status_code']
+)
+
+REQUEST_DURATION = Histogram(
+    'http_request_duration_seconds',
+    'HTTP request duration in seconds',
+    ['method', 'endpoint']
+)
+
+ACTIVE_CONNECTIONS = Gauge(
+    'http_active_connections',
+    'Number of active HTTP connections'
+)
+
+ERROR_RATE = Gauge(
+    'http_error_rate_percent',
+    'HTTP error rate percentage'
+)
+
+class HTTPMetricsCollector:
+    def __init__(self):
+        self.error_count = 0
+        self.total_count = 0
+        self.active_requests = 0
+        self.lock = threading.Lock()
+    
+    def before_request(self):
+        """Track request start"""
+        with self.lock:
+            self.active_requests += 1
+            ACTIVE_CONNECTIONS.set(self.active_requests)
+        
+        request.start_time = time.time()
+    
+    def after_request(self, response):
+        """Track request completion"""
+        with self.lock:
+            self.active_requests -= 1
+            ACTIVE_CONNECTIONS.set(self.active_requests)
+            
+            self.total_count += 1
+            if response.status_code >= 400:
+                self.error_count += 1
+            
+            # Update error rate
+            error_rate = (self.error_count / self.total_count) * 100
+            ERROR_RATE.set(error_rate)
+        
+        # Record metrics
+        duration = time.time() - request.start_time
+        
+        REQUEST_COUNT.labels(
+            method=request.method,
+            endpoint=request.endpoint or 'unknown',
+            status_code=response.status_code
+        ).inc()
+        
+        REQUEST_DURATION.labels(
+            method=request.method,
+            endpoint=request.endpoint or 'unknown'
+        ).observe(duration)
+        
+        return response
+
+# Initialize metrics collector
+metrics_collector = HTTPMetricsCollector()
+app.before_request(metrics_collector.before_request)
+app.after_request(metrics_collector.after_request)
+
+@app.route('/metrics')
+def metrics():
+    """Prometheus metrics endpoint"""
+    return generate_latest()
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    return jsonify({'status': 'healthy', 'timestamp': time.time()})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
+```
+
+```yaml
+# 05-http-metrics/prometheus-config.yml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alert_rules.yml"
+
+scrape_configs:
+  - job_name: 'http-metrics-app'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 5s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+```
+
+### p6-docman-app: Document Management Application
+
+**Project Overview**: Document management application designed for SRE scenarios including monitoring, incident response, and reliability testing.
+
+**Implementation**:
+
+```python
+# p6-docman-app/app.py
+from flask import Flask, request, jsonify, abort
+import os
+import time
+import uuid
+import threading
+from werkzeug.utils import secure_filename
+import logging
+
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = '/tmp/documents'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+
+# Simulate database
+documents_db = {}
+db_lock = threading.Lock()
+
+# Metrics tracking
+metrics = {
+    'uploads': 0,
+    'downloads': 0,
+    'errors': 0,
+    'storage_used': 0
+}
+
+class DocumentManager:
+    def __init__(self):
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+        
+    def upload_document(self, file, metadata):
+        """Upload and store document"""
+        try:
+            if not file or file.filename == '':
+                raise ValueError("No file provided")
+            
+            filename = secure_filename(file.filename)
+            document_id = str(uuid.uuid4())
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{document_id}_{filename}")
+            
+            # Simulate potential failures for SRE scenarios
+            if 'fail_upload' in request.args:
+                raise Exception("Simulated upload failure")
+            
+            # Simulate slow uploads
+            if 'slow_upload' in request.args:
+                time.sleep(5)
+            
+            file.save(file_path)
+            
+            # Store metadata
+            with db_lock:
+                documents_db[document_id] = {
+                    'id': document_id,
+                    'filename': filename,
+                    'file_path': file_path,
+                    'size': os.path.getsize(file_path),
+                    'uploaded_at': time.time(),
+                    'metadata': metadata
+                }
+                
+                metrics['uploads'] += 1
+                metrics['storage_used'] += os.path.getsize(file_path)
+            
+            return document_id
+            
+        except Exception as e:
+            metrics['errors'] += 1
+            raise e
+    
+    def get_document(self, document_id):
+        """Retrieve document metadata"""
+        with db_lock:
+            document = documents_db.get(document_id)
+            if not document:
+                raise FileNotFoundError(f"Document {document_id} not found")
+            
+            metrics['downloads'] += 1
+            return document
+    
+    def list_documents(self):
+        """List all documents"""
+        with db_lock:
+            return list(documents_db.values())
+
+doc_manager = DocumentManager()
+
+@app.route('/health')
+def health():
+    """Health check with various scenarios"""
+    # Simulate unhealthy scenarios for testing
+    if 'unhealthy' in request.args:
+        abort(503)
+    
+    if 'slow_health' in request.args:
+        time.sleep(2)
+    
+    return jsonify({
+        'status': 'healthy',
+        'version': '1.0.0',
+        'timestamp': time.time(),
+        'metrics': metrics
+    })
+
+@app.route('/documents', methods=['POST'])
+def upload_document():
+    """Upload document endpoint"""
+    try:
+        if 'file' not in request.files:
+            abort(400, 'No file provided')
+        
+        file = request.files['file']
+        metadata = {
+            'author': request.form.get('author', 'unknown'),
+            'description': request.form.get('description', ''),
+            'tags': request.form.get('tags', '').split(',')
+        }
+        
+        document_id = doc_manager.upload_document(file, metadata)
+        
+        return jsonify({
+            'document_id': document_id,
+            'status': 'uploaded',
+            'timestamp': time.time()
+        }), 201
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'timestamp': time.time()
+        }), 500
+
+@app.route('/documents/<document_id>')
+def get_document(document_id):
+    """Get document metadata"""
+    try:
+        document = doc_manager.get_document(document_id)
+        return jsonify(document)
+        
+    except FileNotFoundError:
+        abort(404)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/documents')
+def list_documents():
+    """List all documents"""
+    documents = doc_manager.list_documents()
+    return jsonify({
+        'documents': documents,
+        'count': len(documents),
+        'total_storage': metrics['storage_used']
+    })
+
+@app.route('/metrics')
+def get_metrics():
+    """Application metrics for monitoring"""
+    return jsonify(metrics)
+
+# Simulate memory leak for SRE scenarios
+memory_leak_data = []
+
+@app.route('/simulate/memory-leak')
+def simulate_memory_leak():
+    """Endpoint to simulate memory leak"""
+    global memory_leak_data
+    # Add data that won't be garbage collected
+    memory_leak_data.extend([{'data': 'x' * 1000} for _ in range(1000)])
+    return jsonify({
+        'message': 'Memory leak simulation activated',
+        'leak_objects': len(memory_leak_data)
+    })
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    app.run(host='0.0.0.0', port=5000, debug=True)
+```
+
+```yaml
+# p6-docman-app/docker-compose.yml
+version: '3.8'
+services:
+  docman-app:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+    volumes:
+      - ./documents:/tmp/documents
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+```
+
+### 04-chaos-monkey: Chaos Engineering Implementation
+
+**Project Overview**: Chaos engineering framework for testing system resilience through controlled failure injection.
+
+**Implementation**:
+
+```python
+# 04-chaos-monkey/chaos_monkey.py
+import random
+import time
+import threading
+import subprocess
+import logging
+from datetime import datetime, timedelta
+from enum import Enum
+from dataclasses import dataclass
+from typing import List, Dict, Optional
+
+class ChaosType(Enum):
+    INSTANCE_TERMINATION = "instance_termination"
+    NETWORK_LATENCY = "network_latency"
+    DISK_FILL = "disk_fill"
+    CPU_STRESS = "cpu_stress"
+    MEMORY_STRESS = "memory_stress"
+    SERVICE_KILL = "service_kill"
+
+@dataclass
+class ChaosExperiment:
+    name: str
+    chaos_type: ChaosType
+    target: str
+    duration_minutes: int = 5
+    probability: float = 0.1
+    enabled: bool = True
+    blast_radius: str = "single_instance"
+
+class ChaosMonkey:
+    def __init__(self, config_file: str = None):
+        self.experiments: List[ChaosExperiment] = []
+        self.running = False
+        self.execution_log = []
+        self.safety_checks = True
+        
+        # Load configuration
+        if config_file:
+            self.load_config(config_file)
+    
+    def add_experiment(self, experiment: ChaosExperiment):
+        """Add chaos experiment"""
+        self.experiments.append(experiment)
+        logging.info(f"Added chaos experiment: {experiment.name}")
+    
+    def start_chaos_monkey(self):
+        """Start chaos monkey execution"""
+        if self.running:
+            logging.warning("Chaos monkey already running")
+            return
+        
+        self.running = True
+        chaos_thread = threading.Thread(target=self._chaos_loop)
+        chaos_thread.daemon = True
+        chaos_thread.start()
+        
+        logging.info("Chaos monkey started")
+    
+    def stop_chaos_monkey(self):
+        """Stop chaos monkey execution"""
+        self.running = False
+        logging.info("Chaos monkey stopped")
+    
+    def _chaos_loop(self):
+        """Main chaos execution loop"""
+        while self.running:
+            try:
+                # Run safety checks
+                if self.safety_checks and not self._safety_check():
+                    logging.warning("Safety check failed, skipping chaos round")
+                    time.sleep(60)
+                    continue
+                
+                # Select and execute experiment
+                experiment = self._select_experiment()
+                if experiment:
+                    self._execute_experiment(experiment)
+                
+                # Wait before next round
+                time.sleep(random.randint(60, 300))  # 1-5 minutes
+                
+            except Exception as e:
+                logging.error(f"Error in chaos loop: {str(e)}")
+                time.sleep(60)
+    
+    def _safety_check(self) -> bool:
+        """Perform safety checks before chaos execution"""
+        checks = {
+            'business_hours': self._is_business_hours(),
+            'system_health': self._check_system_health(),
+            'incident_active': not self._is_incident_active(),
+            'deployment_window': not self._is_deployment_window()
+        }
+        
+        passed = all(checks.values())
+        
+        if not passed:
+            failed_checks = [k for k, v in checks.items() if not v]
+            logging.info(f"Safety checks failed: {failed_checks}")
+        
+        return passed
+    
+    def _select_experiment(self) -> Optional[ChaosExperiment]:
+        """Select experiment to run based on probability"""
+        enabled_experiments = [exp for exp in self.experiments if exp.enabled]
+        
+        if not enabled_experiments:
+            return None
+        
+        # Weighted random selection based on probability
+        for experiment in enabled_experiments:
+            if random.random() < experiment.probability:
+                return experiment
+        
+        return None
+    
+    def _execute_experiment(self, experiment: ChaosExperiment):
+        """Execute chaos experiment"""
+        logging.info(f"Executing chaos experiment: {experiment.name}")
+        
+        execution_record = {
+            'experiment': experiment.name,
+            'chaos_type': experiment.chaos_type.value,
+            'target': experiment.target,
+            'start_time': datetime.now(),
+            'status': 'running'
+        }
+        
+        try:
+            # Execute based on chaos type
+            if experiment.chaos_type == ChaosType.INSTANCE_TERMINATION:
+                self._terminate_instance(experiment.target)
+            
+            elif experiment.chaos_type == ChaosType.NETWORK_LATENCY:
+                self._inject_network_latency(experiment.target, experiment.duration_minutes)
+            
+            elif experiment.chaos_type == ChaosType.CPU_STRESS:
+                self._cpu_stress_test(experiment.target, experiment.duration_minutes)
+            
+            elif experiment.chaos_type == ChaosType.MEMORY_STRESS:
+                self._memory_stress_test(experiment.target, experiment.duration_minutes)
+            
+            elif experiment.chaos_type == ChaosType.SERVICE_KILL:
+                self._kill_service(experiment.target)
+            
+            execution_record['status'] = 'completed'
+            execution_record['end_time'] = datetime.now()
+            
+        except Exception as e:
+            execution_record['status'] = 'failed'
+            execution_record['error'] = str(e)
+            execution_record['end_time'] = datetime.now()
+            logging.error(f"Chaos experiment failed: {str(e)}")
+        
+        self.execution_log.append(execution_record)
+    
+    def _terminate_instance(self, target: str):
+        """Terminate EC2 instance or Kubernetes pod"""
+        if target.startswith('pod/'):
+            # Kubernetes pod termination
+            pod_name = target.replace('pod/', '')
+            cmd = f"kubectl delete pod {pod_name}"
+        else:
+            # AWS EC2 instance termination
+            cmd = f"aws ec2 terminate-instances --instance-ids {target}"
+        
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            raise Exception(f"Failed to terminate {target}: {result.stderr}")
+        
+        logging.info(f"Successfully terminated {target}")
+    
+    def _inject_network_latency(self, target: str, duration_minutes: int):
+        """Inject network latency using tc (traffic control)"""
+        # Add latency
+        add_latency_cmd = f"""
+        kubectl exec {target} -- tc qdisc add dev eth0 root handle 1: prio
+        kubectl exec {target} -- tc qdisc add dev eth0 parent 1:3 handle 30: netem delay 100ms
+        """
+        
+        subprocess.run(add_latency_cmd, shell=True)
+        logging.info(f"Injected network latency to {target}")
+        
+        # Wait for duration
+        time.sleep(duration_minutes * 60)
+        
+        # Remove latency
+        remove_latency_cmd = f"kubectl exec {target} -- tc qdisc del dev eth0 root"
+        subprocess.run(remove_latency_cmd, shell=True)
+        logging.info(f"Removed network latency from {target}")
+    
+    def _cpu_stress_test(self, target: str, duration_minutes: int):
+        """Create CPU stress on target"""
+        stress_cmd = f"""
+        kubectl exec {target} -- stress --cpu 2 --timeout {duration_minutes * 60}s
+        """
+        
+        subprocess.run(stress_cmd, shell=True)
+        logging.info(f"CPU stress test completed on {target}")
+    
+    def _memory_stress_test(self, target: str, duration_minutes: int):
+        """Create memory stress on target"""
+        stress_cmd = f"""
+        kubectl exec {target} -- stress --vm 1 --vm-bytes 512M --timeout {duration_minutes * 60}s
+        """
+        
+        subprocess.run(stress_cmd, shell=True)
+        logging.info(f"Memory stress test completed on {target}")
+    
+    def _kill_service(self, service_name: str):
+        """Kill specific service process"""
+        kill_cmd = f"kubectl exec deployment/{service_name} -- pkill -f {service_name}"
+        
+        result = subprocess.run(kill_cmd, shell=True, capture_output=True, text=True)
+        logging.info(f"Killed service {service_name}")
+    
+    def _is_business_hours(self) -> bool:
+        """Check if it's safe business hours for chaos"""
+        now = datetime.now()
+        return 9 <= now.hour <= 17 and now.weekday() < 5  # 9 AM - 5 PM, weekdays
+    
+    def _check_system_health(self) -> bool:
+        """Check overall system health"""
+        # Implement health checks against monitoring systems
+        # This is a simplified version
+        return True
+    
+    def _is_incident_active(self) -> bool:
+        """Check if there's an active incident"""
+        # Integrate with incident management system
+        # This is a simplified version
+        return False
+    
+    def _is_deployment_window(self) -> bool:
+        """Check if we're in a deployment window"""
+        # Check if deployments are happening
+        # This is a simplified version
+        return False
+
+# Example usage and configuration
+def setup_chaos_experiments():
+    """Setup example chaos experiments"""
+    
+    chaos_monkey = ChaosMonkey()
+    
+    # Add various chaos experiments
+    experiments = [
+        ChaosExperiment(
+            name="terminate_web_server",
+            chaos_type=ChaosType.INSTANCE_TERMINATION,
+            target="pod/web-server",
+            probability=0.05,
+            blast_radius="single_pod"
+        ),
+        
+        ChaosExperiment(
+            name="network_latency_injection",
+            chaos_type=ChaosType.NETWORK_LATENCY,
+            target="pod/api-server",
+            duration_minutes=3,
+            probability=0.1
+        ),
+        
+        ChaosExperiment(
+            name="cpu_stress_database",
+            chaos_type=ChaosType.CPU_STRESS,
+            target="pod/database",
+            duration_minutes=2,
+            probability=0.03
+        )
+    ]
+    
+    for experiment in experiments:
+        chaos_monkey.add_experiment(experiment)
+    
+    return chaos_monkey
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    
+    chaos_monkey = setup_chaos_experiments()
+    chaos_monkey.start_chaos_monkey()
+    
+    # Run for demonstration
+    try:
+        time.sleep(600)  # Run for 10 minutes
+    except KeyboardInterrupt:
+        chaos_monkey.stop_chaos_monkey()
+        print("Chaos monkey stopped")
+```
+
+```yaml
+# 04-chaos-monkey/chaos-config.yml
+chaos_monkey:
+  enabled: true
+  safety_checks: true
+  business_hours_only: true
+  
+experiments:
+  - name: "pod_termination"
+    type: "instance_termination"
+    targets: 
+      - "pod/web-app"
+      - "pod/api-service"
+    probability: 0.1
+    enabled: true
+    
+  - name: "network_chaos"
+    type: "network_latency"
+    targets:
+      - "pod/database"
+    duration_minutes: 5
+    probability: 0.05
+    
+  - name: "resource_exhaustion"
+    type: "cpu_stress"
+    targets:
+      - "pod/worker"
+    duration_minutes: 3
+    probability: 0.03
+
+safety_settings:
+  business_hours: "09:00-17:00"
+  blackout_periods:
+    - "2024-01-01"  # New Year
+    - "2024-12-25"  # Christmas
+  
+  health_check_endpoints:
+    - "http://monitoring:9090/api/v1/query"
+    
+  incident_management:
+    check_active_incidents: true
+    incident_api: "http://incident-manager:8080/api/incidents"
+```
+
+---
+
 ## Monitoring and Observability
 
 ### Exercise 1: Complete Observability Stack Implementation
